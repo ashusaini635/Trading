@@ -23,7 +23,7 @@ def fetch_data(symbol):
         "interval": INTERVAL,
         "outputsize": OUTPUTSIZE,
         "apikey": API_KEY,
-        "timezone": "UTC"
+        "timezone": "Asia/Amman"
     }
 
     response = requests.get(BASE_URL, params=params)

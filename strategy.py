@@ -2,115 +2,175 @@ import numpy as np
 
 def generate_signal(df):
 
-    if len(df) < 120:
+    if len(df) < 150:
         return "HOLD", 0
 
     latest = df.iloc[-1]
     price = latest["close"]
 
-    # =====================
-    # ATR
-    # =====================
-    df["tr"] = np.maximum(
-        df["high"] - df["low"],
-        np.maximum(
-            abs(df["high"] - df["close"].shift()),
-            abs(df["low"] - df["close"].shift())
-        )
-    )
-    atr = df["tr"].rolling(14).mean().iloc[-1]
+    # =========================
+    # MACD & ADX (Trend & Momentum)
+    # =========================
+    macd = df["macd"].iloc[-1]
+    macd_signal = df["macd_signal"].iloc[-1]
+    adx = df["adx"].iloc[-1]
 
-    # Block low-quality market
-    if (latest["high"] - latest["low"]) < atr * 0.6:
-        return "HOLD", 0
+    # =========================
+    # ATR (volatility baseline)
+    # =========================
+    atr = df["atr"].iloc[-1]
 
-    # =====================
-    # TREND FILTER (CRITICAL)
-    # =====================
-    ema50 = df["close"].ewm(span=50).mean().iloc[-1]
-    ema100 = df["close"].ewm(span=100).mean().iloc[-1]
+    # =========================
+    # EMA 9 & 21 (Short-Term Trend Baseline)
+    # =========================
+    ema_9 = df["ema_9"].iloc[-1]
+    ema_21 = df["ema_21"].iloc[-1]
 
-    trend_up = ema50 > ema100
-    trend_down = ema50 < ema100
+    # =========================
+    # TREND (Price Action Structure)
+    # =========================
+    recent_highs = df["high"].rolling(20).max()
+    recent_lows = df["low"].rolling(20).min()
 
-    trend_strength = abs(ema50 - ema100)
+    curr_swing_high = recent_highs.iloc[-2]
+    prev_swing_high = recent_highs.iloc[-22]
 
-    # ONLY TRADE STRONG TREND OR SKIP
-    if trend_strength < atr * 0.8:
-        return "HOLD", 0
+    curr_swing_low = recent_lows.iloc[-2]
+    prev_swing_low = recent_lows.iloc[-22]
 
-    # =====================
-    # STRUCTURE
-    # =====================
-    bos_up = latest["close"] > df["high"].rolling(20).max().iloc[-2]
-    bos_down = latest["close"] < df["low"].rolling(20).min().iloc[-2]
+    trend_up = (curr_swing_high > prev_swing_high) and (curr_swing_low > prev_swing_low)
+    trend_down = (curr_swing_high < prev_swing_high) and (curr_swing_low < prev_swing_low)
 
-    # =====================
-    # LIQUIDITY SWEEP
-    # =====================
-    swing_high = df["high"].rolling(10).max().iloc[-2]
-    swing_low = df["low"].rolling(10).min().iloc[-2]
+    # =========================
+    # CANDLESTICK PATTERNS (Price Action)
+    # =========================
+    prev_candle = df.iloc[-2]
+    body_size = abs(latest["close"] - latest["open"])
+    
+    upper_wick = latest["high"] - max(latest["open"], latest["close"])
+    lower_wick = min(latest["open"], latest["close"]) - latest["low"]
 
-    sweep_low = latest["low"] < swing_low and latest["close"] > swing_low
-    sweep_high = latest["high"] > swing_high and latest["close"] < swing_high
+    bullish_pinbar = (lower_wick > 2 * body_size) and (upper_wick <= body_size)
+    bearish_pinbar = (upper_wick > 2 * body_size) and (lower_wick <= body_size)
 
-    # =====================
-    # PULLBACK
-    # =====================
-    pullback = abs(price - ema50) < atr * 0.4
+    bullish_engulfing = (prev_candle["close"] < prev_candle["open"]) and \
+                        (latest["close"] > latest["open"]) and \
+                        (latest["close"] >= prev_candle["open"]) and \
+                        (latest["open"] <= prev_candle["close"])
 
-    # =====================
-    # MARKET STATE CLASSIFICATION
-    # =====================
-    trending_market = abs(ema50 - ema100) > atr * 0.8
+    bearish_engulfing = (prev_candle["close"] > prev_candle["open"]) and \
+                        (latest["close"] < latest["open"]) and \
+                        (latest["close"] <= prev_candle["open"]) and \
+                        (latest["open"] >= prev_candle["close"])
 
-    # =====================
-    # FINAL RULE: ONLY 1 TYPE OF TRADE
-    # =====================
+    # =========================
+    # LIQUIDITY (SMC CORE)
+    # =========================
+    equal_highs = abs(df["high"].iloc[-2] - df["high"].iloc[-3]) < atr * 0.2
+    equal_lows = abs(df["low"].iloc[-2] - df["low"].iloc[-3]) < atr * 0.2
+
+    sweep_high = latest["high"] > df["high"].iloc[-2] and latest["close"] < df["high"].iloc[-2]
+    sweep_low = latest["low"] < df["low"].iloc[-2] and latest["close"] > df["low"].iloc[-2]
+
+    # =========================
+    # FAIR VALUE GAP (FVG)
+    # =========================
+    fvg_up = df["low"].iloc[-1] > df["high"].iloc[-3]
+    fvg_down = df["high"].iloc[-1] < df["low"].iloc[-3]
+
+    # =========================
+    # ORDER BLOCK (simplified)
+    # =========================
+    last_bearish_candle = df[df["close"] < df["open"]].iloc[-1]
+    last_bullish_candle = df[df["close"] > df["open"]].iloc[-1]
+
+    # A bullish OB is the last down-candle. We buy when price pulls back into its range.
+    near_bull_ob = last_bearish_candle["low"] < price < last_bearish_candle["high"]
+    # A bearish OB is the last up-candle. We sell when price pulls back into its range.
+    near_bear_ob = last_bullish_candle["low"] < price < last_bullish_candle["high"]
+
+    # =========================
+    # PREMIUM / DISCOUNT
+    # =========================
+    range_high = df["high"].rolling(50).max().iloc[-1]
+    range_low = df["low"].rolling(50).min().iloc[-1]
+
+    equilibrium = (range_high + range_low) / 2
+
+    discount_zone = price < equilibrium
+    premium_zone = price > equilibrium
+
+    # =========================
+    # MOMENTUM
+    # =========================
+    momentum = df["close"].iloc[-1] - df["close"].iloc[-5]
+
+    # =========================
+    # SCORING ENGINE
+    # =========================
     buy = 0
     sell = 0
 
-    # 🔵 MODE 1: TREND CONTINUATION ONLY
-    if trending_market:
+    # 1. BASELINE TREND (EMA 9 & 21) - Strict Filter
+    if ema_9 > ema_21 and price > ema_9:
+        buy += 4
+    elif ema_9 < ema_21 and price < ema_9:
+        sell += 4
 
-        if trend_up and bos_up and pullback:
-            buy += 7
+    # 2. PRICE ACTION TREND
+    if trend_up:
+        buy += 3
+    if trend_down:
+        sell += 3
 
-        if trend_down and bos_down and pullback:
-            sell += 7
+    # 3. PULLBACK ZONES (Discount/Premium)
+    if discount_zone:
+        buy += 3
+    if premium_zone:
+        sell += 3
 
-    # 🔵 MODE 2: REVERSAL (ONLY WHEN EXTREME SWEEP)
-    else:
+    # 4. SMART MONEY (Liquidity / OB / FVG)
+    if sweep_low or near_bull_ob or fvg_up:
+        buy += 3
+    if sweep_high or near_bear_ob or fvg_down:
+        sell += 3
 
-        if sweep_low:
-            buy += 6
+    # 5. CANDLESTICK REJECTION
+    if bullish_pinbar or bullish_engulfing:
+        buy += 3
+    if bearish_pinbar or bearish_engulfing:
+        sell += 3
 
-        if sweep_high:
-            sell += 6
-
-    # =====================
-    # MOMENTUM
-    # =====================
-    momentum = df["close"].iloc[-1] - df["close"].iloc[-5]
-
-    if momentum > 0:
+    # 6. MOMENTUM & VOLATILITY
+    if macd > macd_signal:
         buy += 2
-    elif momentum < 0:
+    elif macd < macd_signal:
+        sell += 2
+        
+    if adx > 25:
+        if ema_9 > ema_21:
+            buy += 2
+        if ema_9 < ema_21:
+            sell += 2
+
+    # 7. RSI PULLBACK CONFLUENCE
+    if 35 < df["rsi"].iloc[-1] < 50:
+        buy += 2
+    if 50 < df["rsi"].iloc[-1] < 65:
         sell += 2
 
-    # =====================
-    # FINAL SCORE
-    # =====================
-    max_score = 10
+    # =========================
+    # FINAL DECISION
+    # =========================
+    max_score = 22
 
     buy_conf = (buy / max_score) * 100
     sell_conf = (sell / max_score) * 100
 
-    # STRICTER ENTRY (IMPORTANT FIX)
-    if buy_conf > 60 and buy > sell:
+    if buy_conf >= 50 and buy > sell:
         return "BUY", round(buy_conf, 2)
 
-    if sell_conf > 60 and sell > buy:
+    if sell_conf >= 50 and sell > buy:
         return "SELL", round(sell_conf, 2)
 
     return "HOLD", 0

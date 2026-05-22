@@ -3,7 +3,7 @@ from indicators import calculate_indicators
 from strategy import generate_signal
 from risk_management import calculate_levels
 
-INITIAL_BALANCE = 100
+INITIAL_BALANCE = 1000
 
 
 def backtest():
@@ -12,7 +12,7 @@ def backtest():
     df = calculate_indicators(df)
 
     balance = INITIAL_BALANCE
-    trades = wins = losses = 0
+    trades = wins = losses = break_evens = 0
 
     trade = None
 
@@ -29,14 +29,17 @@ def backtest():
             # 🔥 SMART BREAK-EVEN (FIXED)
             if trade["type"] == "BUY":
 
-                trigger = trade["entry"] + (trade["tp"] - trade["entry"]) * 0.7
+                trigger = trade["entry"] + (trade["tp"] - trade["entry"]) * 0.6
 
                 if high >= trigger:
                     trade["sl"] = trade["entry"]
 
                 if low <= trade["sl"]:
-                    balance -= trade["risk"]
-                    losses += 1
+                    if trade["sl"] == trade["entry"]:
+                        break_evens += 1
+                    else:
+                        balance -= trade["risk"]
+                        losses += 1
                     trade = None
 
                 elif high >= trade["tp"]:
@@ -46,14 +49,17 @@ def backtest():
 
             else:
 
-                trigger = trade["entry"] - (trade["entry"] - trade["tp"]) * 0.7
+                trigger = trade["entry"] - (trade["entry"] - trade["tp"]) * 0.6
 
                 if low <= trigger:
                     trade["sl"] = trade["entry"]
 
                 if high >= trade["sl"]:
-                    balance -= trade["risk"]
-                    losses += 1
+                    if trade["sl"] == trade["entry"]:
+                        break_evens += 1
+                    else:
+                        balance -= trade["risk"]
+                        losses += 1
                     trade = None
 
                 elif low <= trade["tp"]:
@@ -81,6 +87,7 @@ def backtest():
                     "entry": entry,
                     "sl": sl,
                     "tp": tp,
+                    "lot": lot,
                     "risk": risk,
                     "reward": reward
                 }
@@ -92,6 +99,7 @@ def backtest():
     print("Trades:", trades)
     print("Wins:", wins)
     print("Losses:", losses)
+    print("Break-evens:", break_evens)
 
 
 if __name__ == "__main__":
